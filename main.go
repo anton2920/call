@@ -64,7 +64,7 @@ func main() {
 		// slog.SetLogLoggerLevel(slog.LevelDebug)
 	}
 
-	port := flag.Uint("p", 8080, "port value to listen on")
+	port := flag.Uint("p", 7071, "port value to listen on")
 	flag.Parse()
 	netAddr := fmt.Sprintf("0.0.0.0:%d", *port)
 
@@ -75,7 +75,7 @@ func main() {
 	go func() {
 		signal := <-sigchan
 		slog.Info("Received", "signal", signal)
-		slog.Info("Workster is exitting...")
+		slog.Info("Call is exitting...")
 
 		server.Close()
 		os.Exit(0)
