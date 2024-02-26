@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>Room {{.}}</title>
+
+	<style>
+		#videos {
+			display: grid;
+			grid-template-columns: repeat(auto-fill, 400px);
+			grid-auto-rows: 400px;
+		}
+
+		video {
+			width: 100%;
+			height: 100%;
+			object-fit: cover;
+		}
+	</style>
+</head>
+<body>
+	<h2>Room {{.}}</h2>
+
+	<div id="checks">
+		<p id="check-js">Your browser needs support for JavaScript.</p>
+		<p id="check-ws" style="display: none">Your browser needs support for WebSockets.</p>
+		<p id="check-rtc" style="display: none">Your browser needs support for WebRTC.</p>
+
+		<p id="check-audio" style="display: none">Allow access to microphone so you can use it.</p>
+		<p id="check-video" style="display: none">Allow access to camera so you can use it.</p>
+	</div>
+
+	<div id="videos"></div>
+	<br>
+
+	<div>
+		<input type="checkbox" id="gain-check" onchange="AudioCheckHandler(GainCheck)" name="autoGainControl">
+		<label for="gain-check">Automatic gain</label>
+
+		<input type="checkbox" id="echo-check" onchange="AudioCheckHandler(EchoCheck)" name="echoCancellation">
+		<label for="echo-check">Echo cancellation</label>
+
+		<input type="checkbox" id="noise-check" onchange="AudioCheckHandler(NoiseCheck)" name="noiseSuppression">
+		<label for="noise-check">Noise suppression</label>
+	</div>
+	<br>
+
+	<div>
+		<input type="submit" id="audio-button" onclick="AudioButtonHandler()" value="Unmute">
+		<input type="submit" id="video-button" onclick="VideoButtonHandler()" value="Enable camera">
+		<input type="submit" id="flip-button" style="display: none" onclick="FlipButtonHandler()" value="Flip camera">
+		<input type="submit" id="screen-button" onclick="ScreenButtonHandler()" value="Show screen">
+	</div>
+	<br>
+
+	<div>
+		<input type="submit" id="join-button" onclick="JoinButtonHandler()" value="Join">
+		<input type="submit" id="leave-button" onclick="LeaveButtonHandler()" value="Leave" disabled>
+	</div>
+
+	<script>
+		"use strict";
+
+		var ICEConfig = {
+			"iceServers": [
+				{"urls": "stun:stun.l.google.com:19302"},
+				{"urls": "stun:stun1.l.google.com:19302"}
+			]
+		};
+
+		var Check = document.getElementById("check-js");
+		Check.style.display = "none";
+
+		var CheckWS = document.getElementById("check-ws");
+		var CheckRTC = document.getElementById("check-rtc");
+		var CheckAudio = document.getElementById("check-audio");
+		var CheckVideo = document.getElementById("check-video");
+
+		var Videos = document.getElementById("videos");
+		function AddVideo(stream, muted) {
+			var video = document.createElement("video");
+			video.srcObject = stream;
+			video.muted = muted;
+			video.onloadedmetadata = function() {
+				video.play();
+			};
+			Videos.append(video);
+
+			return video;
+		}
+
+		function SendICECandidate(token, ice) {
+			var message = {
+				"Type": "ICE",
+				"ICE": ice,
+				"Token": token
+			};
+			WS.send(JSON.stringify(message));
+		}
+
+		function SendICECandidates(token) {
+			if (Peers[token].ICE.length) {
+				for (var i = 0; i < Peers[token].ICE.length; ++i) {
+					SendICECandidate(token, Peers[token].ICE[i]);
+				}
+				Peers[token].ICE.length = 0;
+			}
+		}
+
+		function AddTrack(stream, track) {
+			stream.addTrack(track);
+			track.onended = function() {
+				RemoveTrack(stream, track);
+			}
+
+			for (var token in Peers) {
+				var rtc = Peers[token].RTC;
+				rtc.addTrack(track, stream);
+			}
+		}
+
+		function AddTracks(stream, tracks) {
+			for (var i = 0; i < tracks.length; ++i) {
+				AddTrack(stream, tracks[i]);
+			}
+		}
+
+		function RemoveTrack(stream, track) {
+			stream.removeTrack(track);
+			track.enabled = false;
+			track.stop();
+
+			for (var token in Peers) {
+				var rtc = Peers[token].RTC;
+				var senders = rtc.getSenders();
+
+				for (var i = 0; i < senders.length; ++i) {
+					if (senders[i].track == track) {
+						rtc.removeTrack(senders[i]);
+						break;
+					}
+				}
+			}
+		}
+
+		function RemoveTracks(stream, tracks) {
+			for (var i = 0; i < tracks.length; ++i) {
+				RemoveTrack(stream, tracks[i]);
+			}
+		}
+
+		function AddPeer(token, polite) {
+			try {
+				var rtc = new RTCPeerConnection(ICEConfig);
+			} catch (e) {
+				CheckRTC.style.display = "";
+				WS.close();
+				WS = undefined;
+				return;
+			}
+			var peer = {
+				"ICE": [],
+				"RTC": rtc,
+				"Videos": {},
+				"Polite": polite,
+				"SendingOffer": false,
+			};
+			var ice = peer.ICE;
+
+			rtc.ontrack = function(event) {
+				if ((event.streams) && (event.streams[0])) {
+					var id = event.streams[0].id;
+					if (!peer.Videos[id]) {
+						peer.Videos[id] = AddVideo(event.streams[0], false);
+						var interval = setInterval(function() {
+							var peer = Peers[token];
+							if (peer) {
+								var video = peer.Videos[id];
+								if (video) {
+									if (video.srcObject.getTracks().length) {
+										return;
+									}
+									video.remove();
+									delete peer.Videos[id];
+								}
+							}
+
+							clearInterval(interval);
+						}, 1000);
+					}
+				}
+			};
+
+			rtc.onicecandidate = function(event) {
+				if (event.candidate) {
+					if (rtc.remoteDescription) {
+						SendICECandidate(token, event.candidate);
+					} else {
+						ice.push(event.candidate);
+					}
+				}
+			};
+
+			rtc.onnegotiationneeded = function(event) {
+				peer.SendingOffer = true;
+
+				rtc.createOffer().then(function(offer) {
+					rtc.setLocalDescription(offer).then(function() {
+						var message = {
+							"Type": "Offer",
+							"Offer": offer,
+							"Token": token
+						};
+						WS.send(JSON.stringify(message));
+
+						peer.SendingOffer = false;
+					});
+				});
+			};
+
+			var tracks = AudioVideoStream.getTracks();
+			for (var i = 0; i < tracks.length; ++i) {
+				rtc.addTrack(tracks[i], AudioVideoStream);
+			}
+
+			tracks = ScreenStream.getTracks();
+			for (var i = 0; i < tracks.length; ++i) {
+				rtc.addTrack(tracks[i], ScreenStream);
+			}
+
+			Peers[token] = peer;
+			return peer;
+		}
+
+		function RemovePeer(token) {
+			Peers[token].RTC.close();
+			for (var video in Peers[token].Videos) {
+				Peers[token].Videos[video].remove();
+			}
+			delete Peers[token];
+		}
+
+		function RemovePeers() {
+			for (var token in Peers) {
+				RemovePeer(token);
+			}
+			Peers = {};
+		}
+
+		function SetOfferSendAnswer(token, offer) {
+			var rtc = Peers[token].RTC;
+
+			rtc.setRemoteDescription(offer).then(function() {
+				rtc.createAnswer().then(function(answer) {
+					rtc.setLocalDescription(answer).then(function() {
+						var message = {
+							"Type": "Answer",
+							"Answer": answer,
+							"Token": token
+						};
+						WS.send(JSON.stringify(message));
+
+						SendICECandidates(token);
+					});
+				});
+			});
+		}
+
+		var WS = undefined;
+		var Peers = {};
+		var JoinButton = document.getElementById("join-button");
+		function JoinButtonHandler() {
+			JoinButton.disabled = true;
+
+			try {
+				WS = new WebSocket("wss://" + location.host + "/websocket" + location.pathname);
+			} catch (e) {
+				CheckWS.style.display = "";
+				return;
+			}
+
+			WS.onclose = function(event) {
+				console.log(event);
+				RemovePeers();
+				LeaveButton.disabled = true;
+			};
+
+			WS.onmessage = function(msg) {
+				var message = JSON.parse(msg.data);
+
+				var token = message["Token"];
+				var t = message["Type"];
+
+				switch (t) {
+				case "Answer":
+					Peers[token].RTC.setRemoteDescription(new RTCSessionDescription(message["Answer"])).then(function() {
+						SendICECandidates(token);
+					});
+					break;
+				case "ICE":
+					Peers[token].RTC.addIceCandidate(message["ICE"]).catch(function() {});
+					break;
+				case "Leave":
+					RemovePeer(token);
+					break;
+				case "NeedOffer":
+					AddPeer(token, false);
+					break;
+				case "Offer":
+					var peer = Peers[token]
+					if (!peer) {
+						peer = AddPeer(token, true);
+					}
+
+					var rtc = peer.RTC;
+					if ((peer.SendingOffer) || (rtc.localDesription)) {
+						if (!peer.Polite) {
+							return;
+						}
+
+						rtc.setLocalDescription(new RTCSessionDescription({type: "rollback"})).then(function() {
+							SetOfferSendAnswer(token, new RTCSessionDescription(message["Offer"]));
+						});
+						return;
+					}
+
+					SetOfferSendAnswer(token, new RTCSessionDescription(message["Offer"]));
+					break;
+				default:
+					throw new Error("Unrecognized message type!");
+				}
+			};
+
+			WS.onopen = function(event) {
+				var interval = setInterval(function() {
+					if (!WS) {
+						clearInterval(interval);
+						return;
+					}
+
+					var message = {
+						"Type": "Ping"
+					};
+					WS.send(JSON.stringify(message));
+				}, 5000);
+				LeaveButton.disabled = false;
+			};
+		}
+
+		var LeaveButton = document.getElementById("leave-button");
+		function LeaveButtonHandler() {
+			LeaveButton.disabled = true;
+			WS.close();
+			WS = undefined;
+			JoinButton.disabled = false;
+		}
+
+		var AudioVideoStream = new MediaStream();
+		function GetAudioTracks() {
+			return navigator.mediaDevices.getUserMedia({audio: true}).then(function(stream) {
+				return stream.getAudioTracks();
+			});
+		}
+
+		var GainCheck = document.getElementById("gain-check");
+		var EchoCheck = document.getElementById("echo-check");
+		var NoiseCheck = document.getElementById("noise-check");
+		function AudioCheckHandler(check) {
+			var tracks = AudioVideoStream.getAudioTracks();
+			for (var i = 0; i < tracks.length; ++i) {
+				var track = tracks[i];
+				var settings = track.getSettings();
+
+				var old = settings[check.name];
+				if (old == undefined) {
+					/* NOTE(anton2920): in Firefox 52 some properties are named as '"moz" + strings.Title(check.name)'. */
+
+					var newName = "moz" + check.name.charAt(0).toUpperCase() + check.name.substr(1);
+					old = settings[newName];
+					if (old == undefined) {
+						check.checked = false;
+						check.disabled = true;
+						return;
+					}
+					check.name = newName;
+				}
+
+				settings[check.name] = check.checked;
+				track.applyConstraints(settings).catch(function(err) {
+					check.checked = old;
+					check.disabled = true;
+				});
+
+			}
+		}
+
+		function ToggleTracks(tracks, button, enabledString, disabledString) {
+			for (var i = 0; i < tracks.length; ++i) {
+				var track = tracks[i];
+				track.enabled = !track.enabled;
+			}
+			return track.enabled;
+		}
+
+		var AudioButton = document.getElementById("audio-button");
+		function AudioButtonHandler() {
+			var tracks = AudioVideoStream.getAudioTracks();
+			if (!tracks.length) {
+				GetAudioTracks().then(function(tracks) {
+					AddTracks(AudioVideoStream, tracks);
+
+					AudioCheckHandler(GainCheck);
+					AudioCheckHandler(EchoCheck);
+					AudioCheckHandler(NoiseCheck);
+
+					AudioButton.value = "Mute";
+					CheckAudio.style.display = "none";
+
+					var interval = setInterval(function() {
+						if (AudioVideoStream.getTracks().length) {
+							return;
+						}
+						AudioButton.value = "Unmute";
+						clearInterval(interval);
+					}, 200);
+				}).catch(function(err) {
+					switch (err.name) {
+					case "NotAllowedError":
+						CheckAudio.style.display = "";
+						break;
+					default:
+						console.error(err);
+						break;
+					}
+				});
+				return;
+			}
+
+			AudioButton.value = (ToggleTracks(tracks)) ? "Mute" : "Unmute";
+		}
+
+		function GetVideoTracks() {
+			return navigator.mediaDevices.getUserMedia({video: true}).then(function(stream) {
+				return stream.getVideoTracks();
+			});
+		}
+
+		var FlipButton = document.getElementById("flip-button");
+		function FlipButtonHandler() {
+			var tracks = AudioVideoStream.getVideoTracks();
+			for (var i = 0; i < tracks.length; ++i) {
+				var track = tracks[i];
+				var settings = track.getSettings();
+
+				var old = settings.flipMode;
+				if (old == undefined) {
+					return;
+				}
+
+				var n = "";
+				switch (old) {
+				case "user":
+					n = "environment";
+					break;
+				case "environment":
+					n = "user";
+					break;
+				default:
+					return;
+				}
+
+				settings.flipMode = n;
+				track.applyConstraints(settings);
+			}
+		}
+
+		var VideoButton = document.getElementById("video-button");
+		var VideoElement = undefined;
+		function VideoButtonHandler() {
+			var tracks = AudioVideoStream.getVideoTracks();
+			if (!tracks.length) {
+				GetVideoTracks().then(function(tracks) {
+					AddTracks(AudioVideoStream, tracks);
+					VideoButton.value = "Disable camera";
+					CheckVideo.style.display = "none";
+
+					var canFlip = false;
+					for (var i = 0; i < tracks.length; ++i) {
+						var settings = tracks[i].getSettings();
+						canFlip = canFlip || (settings.flipMode != undefined);
+					}
+					if (canFlip) {
+						FlipButton.style.display = "";
+					}
+
+					if (VideoElement == undefined) {
+						VideoElement = AddVideo(AudioVideoStream, true);
+						var interval = setInterval(function() {
+							if (VideoElement) {
+								if (VideoElement.srcObject.getTracks().length) {
+									return;
+								}
+								VideoElement.remove();
+								VideoElement = undefined;
+								VideoButton.value = "Enable camera";
+							}
+							clearInterval(interval);
+						}, 200);
+					}
+				}).catch(function(err) {
+					switch (err.name) {
+					case "NotAllowedError":
+						CheckVideo.style.display = "";
+						break;
+					default:
+						console.error(err);
+						break;
+					}
+				});
+				return;
+			}
+
+			VideoButton.value = (ToggleTracks(tracks)) ? "Disable camera" : "Enable camera";
+		}
+
+		var ScreenStream = new MediaStream();
+		function GetScreenTracks() {
+			var options = {
+				video: true,
+				audio: {
+					suppressLocalAudioPlayback: false
+				},
+				systemAudio: "include"
+			};
+			return navigator.mediaDevices.getDisplayMedia(options).then(function(stream) {
+				return stream.getTracks();
+			});
+		}
+
+		var ScreenButton = document.getElementById("screen-button");
+		function ScreenButtonHandler() {
+			if (!ScreenStream.getTracks().length) {
+				GetScreenTracks().then(function(tracks) {
+					AddTracks(ScreenStream, tracks);
+					ScreenButton.value = "Stop sharing";
+
+					var video = AddVideo(ScreenStream, true);
+					var interval = setInterval(function() {
+						if (video) {
+							if (video.srcObject.getTracks().length) {
+								return;
+							}
+							video.remove();
+							ScreenButton.value = "Share screen";
+						}
+						clearInterval(interval);
+					}, 200);
+				});
+				return;
+			}
+
+			RemoveTracks(ScreenStream, ScreenStream.getTracks());
+		}
+
+		function main() {
+			GainCheck.checked = true;
+			GainCheck.disabled = false;
+
+			EchoCheck.checked = false;
+			EchoCheck.disabled = false;
+
+			NoiseCheck.checked = false;
+			NoiseCheck.disabled = false;
+
+			ScreenButton.style.display = (navigator.mediaDevices.getDisplayMedia == undefined) ? "none" : "";
+
+			AudioButtonHandler();
+			VideoButtonHandler();
+
+			JoinButton.disabled = false;
+		}
+
+		window.onload = main;
+	</script>
+</body>
+</html>
