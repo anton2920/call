@@ -54,14 +54,15 @@ func GetRouter() *http.ServeMux {
 	ParseTemplates()
 
 	mux.Handle("/", RequestHandler(RoomTmplHandler))
-	mux.Handle("/websocket/room/", websocket.Handler(WebsocketRoomHandler))
+	mux.Handle("/favicon.ico", http.NotFoundHandler())
+	mux.Handle("/websocket/", websocket.Handler(WebsocketRoomHandler))
 
 	return mux
 }
 
 func main() {
 	if DebugMode == "on" {
-		// slog.SetLogLoggerLevel(slog.LevelDebug)
+		slog.SetLogLoggerLevel(slog.LevelDebug)
 	}
 
 	port := flag.Uint("p", 7071, "port value to listen on")

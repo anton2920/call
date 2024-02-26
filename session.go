@@ -7,23 +7,20 @@ import (
 )
 
 func GenerateSessionToken() (string, error) {
-	var token string
 	var tokenBytes [64]byte
 
-	for {
-		timeBytes, err := time.Now().MarshalBinary()
-		if err != nil {
-			return "", WrapErrorWithTrace(err)
-		}
-		copy(tokenBytes[:len(timeBytes)], timeBytes)
-
-		if _, err := rand.Read(tokenBytes[len(timeBytes):]); err != nil {
-			return "", WrapErrorWithTrace(err)
-		}
-
-		tokenEncodedBytes := make([]byte, base64.StdEncoding.EncodedLen(len(tokenBytes)))
-		base64.StdEncoding.Encode(tokenEncodedBytes, tokenBytes[:])
-		token = string(tokenEncodedBytes)
+	timeBytes, err := time.Now().MarshalBinary()
+	if err != nil {
+		return "", WrapErrorWithTrace(err)
 	}
-	return token, nil
+	copy(tokenBytes[:len(timeBytes)], timeBytes)
+
+	if _, err := rand.Read(tokenBytes[len(timeBytes):]); err != nil {
+		return "", WrapErrorWithTrace(err)
+	}
+
+	tokenEncodedBytes := make([]byte, base64.StdEncoding.EncodedLen(len(tokenBytes)))
+	base64.StdEncoding.Encode(tokenEncodedBytes, tokenBytes[:])
+
+	return string(tokenEncodedBytes), nil
 }
