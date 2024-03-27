@@ -272,7 +272,7 @@
 			JoinButton.disabled = true;
 
 			try {
-				WS = new WebSocket("wss://" + location.host + "/websocket" + location.pathname);
+				WS = new WebSocket("wss://" + location.host + "/ws" + location.pathname);
 			} catch (e) {
 				CheckWS.style.display = "";
 				return;

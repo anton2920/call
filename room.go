@@ -88,7 +88,7 @@ func WebsocketRoomHandler(ws *websocket.Conn) {
 	if err := func(ws *websocket.Conn) error {
 		r := ws.Request()
 
-		id, err := GetIDFromURL(r.URL, "/websocket/")
+		id, err := GetIDFromURL(r.URL, "/ws/")
 		if err != nil {
 			return err
 		}

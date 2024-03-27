@@ -55,7 +55,7 @@ func GetRouter() *http.ServeMux {
 
 	mux.Handle("/", RequestHandler(RoomTmplHandler))
 	mux.Handle("/favicon.ico", http.NotFoundHandler())
-	mux.Handle("/websocket/", websocket.Handler(WebsocketRoomHandler))
+	mux.Handle("/ws/", websocket.Handler(WebsocketRoomHandler))
 
 	return mux
 }
