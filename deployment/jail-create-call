@@ -1,0 +1,46 @@
+#!/bin/sh
+
+PROJECT=`basename $0`
+
+arg()
+{
+	test "$1" = "-u" && UPDATE="-u"
+}
+
+usage()
+{
+	echo "usage: $PROJECT [-u] [port]" >&2
+	exit 1
+}
+
+while echo -n "$1" | grep '^-' >/dev/null; do
+	arg $1
+	shift
+done
+
+NAME=call
+
+PORT=$1
+test "$PORT" != "" || PORT=7071
+
+CONTAINER=/usr/local/jails/containers/$NAME
+jail-create $UPDATE $NAME
+
+service jail onestart $NAME >/dev/null
+
+pkg -j $NAME install -y git go
+sysrc -j $NAME call_enable="YES"
+
+PREFIX=/root/go/src/github.com/anton2920
+mkdir -p $CONTAINER/$PREFIX
+cp -R `dirname $0`/../ $CONTAINER/$PREFIX/$NAME
+
+RC=$CONTAINER/etc/rc.d/$NAME
+sed s/@PORT@/$PORT/ $NAME.rc | sed s+@PREFIX@+$PREFIX+ | sed s/@NAME@/$NAME/ >$RC
+chmod +x $RC
+
+jexec $NAME sh -c "cd $PREFIX/$NAME && ./make.sh"
+
+jls | grep nginx >/dev/null && jexec nginx nginx-site-create -a call.anton2920.ru $PORT
+
+service jail onestop $NAME >/dev/null
